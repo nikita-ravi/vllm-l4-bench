@@ -1,97 +1,133 @@
-# On-array vectorization pipeline + serving-configuration benchmark
+# vllm-l4-bench — a hands-on look at serving embedding models with vLLM
 
-A small, honest demonstration of the GPU-inference decisions a storage appliance
-has to make: **turn files into embeddings as they land, index them for search,
-and measure what each serving configuration costs in throughput, latency, and
-VRAM** — so you know how much GPU headroom is left for storage workloads.
+This is a small, hands-on project I built to actually *feel* how an LLM serving
+engine behaves on a real GPU — not read about it, but measure it. I turned files
+into embeddings, searched them, and then benchmarked the embedding server under
+different settings to see what each choice costs.
 
-Built to mirror three responsibilities directly:
+Everything here ran on a rented **NVIDIA L4** GPU for about 30 minutes.
 
-| This repo | The responsibility it mirrors |
-|---|---|
-| `pipeline/watcher.py` | per-file **sidecar generation driven by filesystem events** |
-| `pipeline/snapshot_index.py` | **snapshot-time index compilation** |
-| `bench/benchmark.py` | **model selection + quantization/serving tradeoffs** on L4/A2-class GPUs |
-| FAISS today, **cuVS/CAGRA** note in `pipeline/index.py` | GPU-accelerated vector search |
+---
 
-## Architecture
+## What is vLLM (in one paragraph)
 
+When you "serve" an AI model, requests arrive one at a time, but a GPU is happiest
+doing lots of work at once. **vLLM** is a server that sits in front of a model and
+is very good at packing many requests together so the GPU stays busy — that's what
+makes it fast. You start it with one command (`vllm serve <model>`), and it gives
+you a web API you can send text to and get answers back. Here I used it to serve
+**embedding** models — models that turn a piece of text into a list of numbers that
+captures its meaning, so you can search by meaning instead of keywords.
+
+---
+
+## Why I did this
+
+A GPU is expensive and shared. If you're going to run inference on one, you have to
+make choices:
+
+- **Which model?** A bigger model is "smarter" but slower and uses more memory.
+- **How do you batch requests?** Send them one at a time, or bundle them?
+- **How much load can it take** before it slows to a crawl?
+
+I wanted to stop guessing and get real numbers for these tradeoffs on real hardware.
+
+---
+
+## What I tried to find out
+
+I served three sizes of the same embedding model (BGE **small**, **base**, and
+**large**) and, for each one, swept two knobs:
+
+- **batch size** — how many texts I send in one request (1, 8, 32, 64)
+- **concurrency** — how many requests are in flight at once (1, 8, 32)
+
+For every combination I measured: **throughput** (texts embedded per second),
+**latency** (how long a request takes — p50 = typical, p99 = worst case),
+**GPU utilization**, and **GPU memory used**. That's 3 models × 4 × 3 = **36
+configurations**, all in one automated run.
+
+The questions behind it:
+1. How much does batching actually help?
+2. What does choosing a bigger model really cost?
+3. How much of the GPU is left over — could storage work run alongside it?
+4. At what point does piling on load make latency blow up?
+
+---
+
+## What I found
+
+Full table: **[results/headline_table.md](results/headline_table.md)**. The short
+version:
+
+**1. Batching is the single biggest win.**
+Sending texts one at a time barely used the GPU. Bundling them up took the small
+model from **71 → 1,591 texts/sec** — about **22× faster**, same hardware, same
+model. The whole reason vLLM exists, seen in one number.
+
+**2. A bigger model costs roughly what you'd expect — now quantified.**
+Peak speed dropped **1,591 → 1,175 → 835 texts/sec** going small → base → large.
+So the large model is ~1.9× slower but gives a 2.67× richer vector (1024 numbers
+vs 384). That's the "is the extra quality worth it?" decision, in actual numbers.
+
+**3. Embeddings barely tax an L4 — lots of headroom.**
+Even the large model used only **1.2 GB out of 24 GB**, and the small/base models
+kept GPU utilization under ~27%. Meaning: you could run this embedding work on the
+same box as other workloads (like a storage system) and still have most of the GPU
+free.
+
+**4. There's a clear "too much load" cliff.**
+Latency stays low, then suddenly explodes. Push the large model to batch 64 with 32
+concurrent requests and the worst-case latency hits **10.5 seconds** — the point
+where requests start piling up in a queue. Good to know where that line is before
+you cross it in production.
+
+---
+
+## Try it yourself
+
+**On a GPU box (I used a RunPod L4):**
+```bash
+pip install -r requirements-l4.txt
+python bench/benchmark.py --n-texts 2000      # runs all 3 models, writes the table
 ```
-file lands ─▶ watcher ─▶ POST /v1/embeddings ─▶ vLLM (L4 / stub) ─▶ <file>.emb.npy sidecar
-                                                                          │
-                                          snapshot_index ─▶ FAISS index ◀─┘ ─▶ top-k query
-benchmark ─▶ per model: start vLLM ▸ capture VRAM ▸ sweep batch×concurrency ▸ stop ▸ table
-```
 
-The whole thing is built around **one embedding client** (`pipeline/embed_client.py`)
-that talks to a stub, a local vLLM, or an L4 vLLM — only the base URL changes.
-
-## Two legs
-
-**Mac (dev / validate, no GPU).** vLLM's fast path is CUDA-only, so the Mac leg
-proves the pipeline and the benchmark orchestration are correct using `--stub`
-(deterministic pseudo-embeddings, no server).
-
+**On a Mac (no GPU) — just to see the pipeline work:**
 ```bash
 uv venv --python 3.11 .venv && source .venv/bin/activate
 uv pip install -r requirements-mac.txt
-
-python scripts/make_samples.py                       # sample corpus in drop/
-python pipeline/watcher.py --dir drop --stub --once  # files -> sidecars
+python scripts/make_samples.py                        # make some sample files
+python pipeline/watcher.py --dir drop --stub --once   # files -> embeddings
 python pipeline/snapshot_index.py --sidecars drop --out results/index.faiss
 python pipeline/index.py query --index results/index.faiss --stub \
-    --text "how do copy-on-write snapshots work"     # similarity search
-python bench/benchmark.py --stub --quick             # validate the sweep logic
+    --text "how do copy-on-write snapshots work"      # search by meaning
+python bench/benchmark.py --stub --quick              # dry-run the benchmark logic
 ```
+(`--stub` fakes the embeddings so it runs without a GPU — real numbers need the L4.)
 
-**L4 (real numbers).** Rent an NVIDIA L4 (~$0.40–0.80/hr). The benchmark manages
-vLLM itself — starts each model, captures load VRAM, sweeps, stops, writes the table.
+---
 
-```bash
-pip install -r requirements-l4.txt
-# terminal 1: continuous GPU timeline
-bash bench/gpu_sample.sh results/gpu_timeline.csv
-# terminal 2: full multi-model sweep -> results/headline_table.md
-python bench/benchmark.py --n-texts 2000
+## The messy-reality part (things I had to solve)
+
+Getting vLLM running on the L4 wasn't plug-and-play — a good reminder that infra
+is half the job. Notes are in `requirements-l4.txt`; the short list:
+
+1. The newest `pip install vllm` grabbed a **CUDA-13 build** the L4's driver was
+   too old for → pinned **vllm==0.11.0** (CUDA-12 build).
+2. That vLLM needed the older **transformers 4.x** API → `transformers<5`.
+3. The box had fast-downloads switched on but was **missing `hf_transfer`**, so
+   model downloads failed → installed it.
+4. vLLM **renamed the embedding flag** between versions (`--task embed` on 0.11,
+   `--runner pooling` on newer ones).
+
+---
+
+## What's in here
+
 ```
-
-Same client code, real GPU. Tear the box down when done (~15–30 min of runtime).
-
-## Results (real run, NVIDIA L4)
-
-Full 36-config table + findings: **[results/headline_table.md](results/headline_table.md)**.
-Headline numbers from the L4 run:
-
-- **Batching is the biggest lever** — bge-small: **71 → 1,591 emb/s** (~22×) from
-  batch 1 to batch 32 at concurrency 32.
-- **Model-selection tradeoff** — peak throughput **1,591 → 1,175 → 835 emb/s**
-  (small → base → large): ~1.9× throughput cost for 2.67× the vector dimension.
-- **Storage-workload headroom** — load VRAM only **0.5 / 0.7 / 1.2 GB of 24 GB**;
-  GPU util ≤ 27% for small/base, up to 63% only for large.
-- **Latency knee** — p99 explodes under load (bge-large hits **10.5 s** at
-  batch 64 / conc 32) — the point past which requests queue.
-
-## Lessons from the real run (RunPod L4)
-
-Reproducing this on a rented L4 surfaced a chain of version constraints worth
-knowing — captured in `requirements-l4.txt`:
-
-1. The newest `pip install vllm` pulls a **CUDA-13 torch** that the L4 host driver
-   (565 / CUDA 12.7) is too old for → pin **vllm==0.11.0** (torch 2.8 / CUDA 12.8).
-2. vLLM 0.11 needs the **transformers 4.x** tokenizer API → `transformers<5`.
-3. The image enables `HF_HUB_ENABLE_HF_TRANSFER=1`, so **`hf_transfer`** must be
-   installed or uncached model downloads fail mid-run.
-4. vLLM renamed the embedding flag across versions: **0.11 uses `--task embed`**
-   (deprecated warning is harmless); 0.24+ uses `--runner pooling`.
-
-## Files
-```
-pipeline/embed_client.py    one client: stub | local | L4  (BGE query prefix baked in)
-pipeline/watcher.py         filesystem events -> .emb.npy sidecars
-pipeline/index.py           FAISS build + query  (cuVS/CAGRA swap-in note)
-pipeline/snapshot_index.py  compile all sidecars into one index
-bench/benchmark.py          multi-model serving-config sweep -> comparison table
-bench/gpu_sample.sh         nvidia-smi timeline
-server/run_vllm.sh          serve one model by hand (optional)
-scripts/make_samples.py     sample corpus
+pipeline/   turn files into embeddings (watcher), search them (FAISS)
+bench/      the multi-model benchmark that produced the table
+server/     run one model by hand (optional)
+scripts/    make sample files
+results/    the actual numbers from the L4 run
 ```
