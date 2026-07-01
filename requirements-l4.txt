@@ -1,6 +1,18 @@
 # L4 leg: the real vLLM server + the benchmark client that drives it.
 # Install on the rented GPU box (NOT on the Mac).
-vllm
+#
+# IMPORTANT — version pins learned the hard way on a RunPod L4:
+#   * The RunPod L4 host driver is 565 / CUDA 12.7. The newest vLLM pulls a
+#     CUDA-13 build of torch, which needs a newer driver than the L4 host has
+#     ("NVIDIA driver is too old"). vllm==0.11.0 uses torch 2.8 / CUDA 12.8,
+#     which the L4 driver supports.
+#   * vllm 0.11.0 needs the transformers 4.x tokenizer API (5.x removed
+#     `all_special_tokens_extended`), hence transformers<5.
+#   * The image enables HF_HUB_ENABLE_HF_TRANSFER=1, so hf_transfer must be
+#     installed or model downloads fail.
+vllm==0.11.0
+transformers<5
+hf_transfer
 numpy>=1.26
 httpx>=0.27
 # optional, only if you also run the pipeline (watcher/index) on the L4:

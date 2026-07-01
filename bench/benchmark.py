@@ -59,10 +59,14 @@ async def sample_gpu(stop_evt):
 
 
 # ---------- vLLM lifecycle ----------
-def wait_health(port, timeout=600):
+def wait_health(port, proc=None, timeout=600):
+    """Poll /health until ready. Fail fast (return False) if the vLLM process
+    has already exited — otherwise a silent crash would hang here for `timeout`."""
     url = f"http://localhost:{port}/health"
     deadline = time.time() + timeout
     while time.time() < deadline:
+        if proc is not None and proc.poll() is not None:
+            return False  # server process died during startup
         try:
             with urlopen(url, timeout=2) as r:
                 if r.status == 200:
@@ -73,15 +77,26 @@ def wait_health(port, timeout=600):
     return False
 
 
-def start_vllm(model, port, task):
+def _tail(path, n=20):
+    try:
+        with open(path, errors="ignore") as f:
+            return "".join(f.readlines()[-n:])
+    except OSError:
+        return "(no log captured)"
+
+
+def start_vllm(model, port, task, log_path):
     print(f"  starting vLLM: {model} (task={task}, port={port}) ...", flush=True)
+    logf = open(log_path, "w")
     proc = subprocess.Popen(
         ["vllm", "serve", model, "--task", task, "--port", str(port)],
-        stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT,
+        stdout=logf, stderr=subprocess.STDOUT,
     )
-    if not wait_health(port):
+    if not wait_health(port, proc=proc):
         proc.terminate()
-        raise SystemExit(f"vLLM for {model} never became healthy")
+        raise RuntimeError(
+            f"vLLM for {model} failed to start. Last log lines:\n{_tail(log_path)}"
+        )
     print("  vLLM healthy.", flush=True)
     return proc
 
@@ -94,6 +109,7 @@ def stop_vllm(proc):
         proc.wait(timeout=30)
     except subprocess.TimeoutExpired:
         proc.kill()
+    time.sleep(3)  # let the GPU + port 8000 fully release before the next model
 
 
 # ---------- corpus ----------
@@ -212,21 +228,30 @@ async def main_async(a):
     for model in models:
         print(f"\n=== {model} ===")
         proc = None
-        if manage:
-            proc = start_vllm(model, a.port, a.task)
-            s = nvidia_smi()
-            if s:
-                load_vram[model] = s[1]
-                print(f"  load VRAM: {s[1]/1024:.1f} GB")
         try:
+            if manage:
+                log_path = os.path.join(os.path.dirname(a.out) or ".",
+                                        f"vllm_{model.split('/')[-1]}.log")
+                proc = start_vllm(model, a.port, a.task, log_path)
+                s = nvidia_smi()
+                if s:
+                    load_vram[model] = s[1]
+                    print(f"  load VRAM: {s[1]/1024:.1f} GB")
             rows = await bench_model(model, a.base_url, a.stub, corpus,
                                      batches, concs, n_requests)
             all_rows.extend(rows)
+            # write after every model so one bad model can't lose the rest
+            write_outputs(all_rows, a.out, load_vram)
+        except Exception as e:
+            print(f"  !! {model} failed, skipping: {e}", flush=True)
         finally:
             if proc is not None:
                 stop_vllm(proc)
 
-    write_outputs(all_rows, a.out, load_vram)
+    if all_rows:
+        write_outputs(all_rows, a.out, load_vram)
+    else:
+        print("no results produced.")
 
 
 def main():

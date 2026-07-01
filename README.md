@@ -57,17 +57,32 @@ python bench/benchmark.py --n-texts 2000
 
 Same client code, real GPU. Tear the box down when done (~15–30 min of runtime).
 
-## What comes out
+## Results (real run, NVIDIA L4)
 
-`results/headline_table.md` — one row per **model × batch × concurrency**
-(3 models × 4 batches × 3 concurrency = 36 configs), with throughput, p50/p99
-latency, GPU utilization, and load-time VRAM.
+Full 36-config table + findings: **[results/headline_table.md](results/headline_table.md)**.
+Headline numbers from the L4 run:
 
-**The headline sentence** (fill from your run): *"On an L4, batching to 64 lifted
-embedding throughput ~N× over batch-1; bge-large gave 2.6× the vector dimension of
-bge-small for ~M× the throughput cost; the largest model used only ~V GB of 24 GB,
-leaving ~H GB of headroom to run embedding inference alongside storage workloads on
-one appliance."*
+- **Batching is the biggest lever** — bge-small: **71 → 1,591 emb/s** (~22×) from
+  batch 1 to batch 32 at concurrency 32.
+- **Model-selection tradeoff** — peak throughput **1,591 → 1,175 → 835 emb/s**
+  (small → base → large): ~1.9× throughput cost for 2.67× the vector dimension.
+- **Storage-workload headroom** — load VRAM only **0.5 / 0.7 / 1.2 GB of 24 GB**;
+  GPU util ≤ 27% for small/base, up to 63% only for large.
+- **Latency knee** — p99 explodes under load (bge-large hits **10.5 s** at
+  batch 64 / conc 32) — the point past which requests queue.
+
+## Lessons from the real run (RunPod L4)
+
+Reproducing this on a rented L4 surfaced a chain of version constraints worth
+knowing — captured in `requirements-l4.txt`:
+
+1. The newest `pip install vllm` pulls a **CUDA-13 torch** that the L4 host driver
+   (565 / CUDA 12.7) is too old for → pin **vllm==0.11.0** (torch 2.8 / CUDA 12.8).
+2. vLLM 0.11 needs the **transformers 4.x** tokenizer API → `transformers<5`.
+3. The image enables `HF_HUB_ENABLE_HF_TRANSFER=1`, so **`hf_transfer`** must be
+   installed or uncached model downloads fail mid-run.
+4. vLLM renamed the embedding flag across versions: **0.11 uses `--task embed`**
+   (deprecated warning is harmless); 0.24+ uses `--runner pooling`.
 
 ## Files
 ```

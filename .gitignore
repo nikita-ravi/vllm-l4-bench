@@ -4,5 +4,7 @@ __pycache__/
 drop/*.emb.npy
 results/*.faiss
 results/*.names.json
-results/*_raw.csv
 results/gpu_*.csv
+results/vllm_*.log
+# NOTE: results/headline_table.md and headline_table_raw.csv ARE committed —
+# they're the deliverable from the L4 run.
