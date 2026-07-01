@@ -1,0 +1,1 @@
+PagedAttention stores the KV cache in fixed-size blocks like virtual memory pages, so vLLM can pack many concurrent sequences into GPU memory without reserving worst-case contiguous space per request.

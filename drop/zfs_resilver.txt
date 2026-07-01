@@ -1,0 +1,1 @@
+Resilvering rebuilds redundancy after a disk is replaced in a ZFS pool. Only the blocks that actually exist are copied, so resilver time scales with used capacity rather than raw disk size.

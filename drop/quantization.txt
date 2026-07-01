@@ -1,0 +1,1 @@
+Quantization stores model weights in fewer bits, such as 4-bit AWQ, to cut GPU memory and speed up inference, trading a small amount of accuracy for a large reduction in footprint.

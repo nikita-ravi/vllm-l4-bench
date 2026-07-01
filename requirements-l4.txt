@@ -1,0 +1,8 @@
+# L4 leg: the real vLLM server + the benchmark client that drives it.
+# Install on the rented GPU box (NOT on the Mac).
+vllm
+numpy>=1.26
+httpx>=0.27
+# optional, only if you also run the pipeline (watcher/index) on the L4:
+# faiss-cpu>=1.8
+# watchdog>=4.0

@@ -1,0 +1,1 @@
+Approximate nearest-neighbor search finds the closest vectors to a query without scanning every point. Graph indexes like CAGRA run this search directly on the GPU for very low latency.

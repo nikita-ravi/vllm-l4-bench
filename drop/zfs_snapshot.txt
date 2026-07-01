@@ -1,0 +1,1 @@
+ZFS snapshots are read-only point-in-time copies of a dataset. Because ZFS is copy-on-write, a snapshot is nearly free to create and only consumes space as the live data diverges from it.

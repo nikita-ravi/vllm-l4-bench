@@ -1,0 +1,1 @@
+Time-series anomaly detection flags telemetry that departs from its normal pattern. On a storage fleet this surfaces failing drives and unusual load before they cause an outage.

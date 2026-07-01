@@ -1,0 +1,1 @@
+An embedding model maps text to a fixed-length vector so that similar meanings land near each other. These vectors power semantic search and retrieval-augmented generation.

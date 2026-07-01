@@ -1,0 +1,5 @@
+# Mac dev leg: pipeline logic + benchmark harness, no vLLM/GPU.
+numpy>=1.26
+httpx>=0.27
+watchdog>=4.0
+faiss-cpu>=1.8
