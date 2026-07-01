@@ -1,11 +1,11 @@
 # vllm-l4-bench — a hands-on look at serving embedding models with vLLM
 
-This is a small, hands-on project I built to actually *feel* how an LLM serving
-engine behaves on a real GPU — not read about it, but measure it. I turned files
-into embeddings, searched them, and then benchmarked the embedding server under
-different settings to see what each choice costs.
+A hands-on project measuring how an LLM serving engine behaves on a real GPU. I
+turned files into embeddings, searched them, and benchmarked the embedding server
+under different settings to see what each choice costs in throughput, latency, and
+GPU memory.
 
-Everything here ran on a rented **NVIDIA L4** GPU for about 30 minutes.
+Everything here ran on a rented **NVIDIA L4** GPU.
 
 ---
 
@@ -45,9 +45,7 @@ this project measures. Concretely, I:
    below is that mechanism being caught in the act.
 
 So the short version: I stood up a production-style inference server and
-load-tested it across 36 configurations. (One thing I did *not* do: quantization —
-the models ran in standard fp16. That's the natural next experiment, not something
-claimed here.)
+load-tested it across 36 configurations.
 
 ---
 
@@ -122,7 +120,7 @@ pip install -r requirements-l4.txt
 python bench/benchmark.py --n-texts 2000      # runs all 3 models, writes the table
 ```
 
-**On a Mac (no GPU) — just to see the pipeline work:**
+**On a Mac (no GPU) — run the pipeline without a GPU:**
 ```bash
 uv venv --python 3.11 .venv && source .venv/bin/activate
 uv pip install -r requirements-mac.txt
@@ -137,10 +135,10 @@ python bench/benchmark.py --stub --quick              # dry-run the benchmark lo
 
 ---
 
-## The messy-reality part (things I had to solve)
+## Getting it running on the L4
 
-Getting vLLM running on the L4 wasn't plug-and-play — a good reminder that infra
-is half the job. Notes are in `requirements-l4.txt`; the short list:
+Standing up vLLM on the L4 took solving a chain of version constraints. Notes are
+in `requirements-l4.txt`; the short list:
 
 1. The newest `pip install vllm` grabbed a **CUDA-13 build** the L4's driver was
    too old for → pinned **vllm==0.11.0** (CUDA-12 build).
