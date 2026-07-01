@@ -21,6 +21,36 @@ captures its meaning, so you can search by meaning instead of keywords.
 
 ---
 
+## This project is about *inference serving* — here's exactly what that means
+
+"Inference serving" = running a model behind a live API so requests come in and
+answers go out, and doing that **efficiently under load** — as opposed to running
+the model once in a script. That "under load" part is the whole game, and it's what
+this project measures. Concretely, I:
+
+1. **Ran a real inference server.** `vllm serve <model>` loaded the model onto the
+   L4 and exposed an HTTP API (`POST /v1/embeddings`). It really goes live —
+   *"Application startup complete… Route: /v1/embeddings"*.
+2. **Sent real requests to it.** The benchmark opened HTTP connections and fired
+   batches of text at that endpoint; the GPU computed the embeddings and sent them
+   back. **Every number in the results table is a real request → GPU → response
+   round-trip** — nothing simulated.
+3. **Measured serving behavior** — throughput, p50/p99 latency, GPU utilization,
+   VRAM. These only mean something *while serving*; they're not model-quality
+   scores, they're "how does this hold up under traffic" numbers.
+4. **Varied the serving configuration** — batch size and concurrency. These are
+   *serving* knobs: they don't change the model, they change how requests get
+   scheduled onto the GPU. Under the hood, vLLM's **continuous batching** packs
+   concurrent requests together to keep the GPU busy — and the 22× batching result
+   below is that mechanism being caught in the act.
+
+So the short version: I stood up a production-style inference server and
+load-tested it across 36 configurations. (One thing I did *not* do: quantization —
+the models ran in standard fp16. That's the natural next experiment, not something
+claimed here.)
+
+---
+
 ## Why I did this
 
 A GPU is expensive and shared. If you're going to run inference on one, you have to
